@@ -291,6 +291,43 @@ function log(type, ...data) {
   messages.push({ type, string })
 }
 
+async function sendDiscordEmbed(entry) {
+  const embed = {
+    color: 16748258,
+    title: `${entry.meta.fullName} Daily Check-In`,
+    author: {
+      name: `${entry.account.uid} - ${entry.account.nickname}`,
+      icon_url: entry.meta.icon,
+    },
+    fields: [
+      { name: 'Nickname',        value: String(entry.account.nickname), inline: true },
+      { name: 'UID',             value: String(entry.account.uid),      inline: true },
+      { name: 'Rank',            value: String(entry.account.rank),     inline: true },
+      { name: 'Region',          value: String(entry.account.region),   inline: true },
+      ...(entry.award ? [{ name: "Today's Reward", value: `${entry.award.name} x${entry.award.count}`, inline: true }] : []),
+      { name: 'Total Check-Ins', value: String(entry.total),            inline: true },
+      { name: 'Result',          value: entry.result,                   inline: false },
+    ],
+    ...(entry.award ? { thumbnail: { url: entry.award.icon } } : {}),
+    timestamp: new Date().toISOString(),
+    footer: { text: `${entry.meta.fullName} Daily Check-In` },
+  }
+
+  const res = await fetch(discordWebhook, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      username: entry.meta.author,
+      avatar_url: entry.meta.icon,
+      embeds: [embed],
+    }),
+  })
+
+  if (res.status !== 204) {
+    log('error', `Error sending Discord embed for ${entry.meta.fullName}`)
+  }
+}
+
 // must be function to return early
 async function discordWebhookSend() {
   log('debug', '\n----- DISCORD WEBHOOK -----')
@@ -300,51 +337,32 @@ async function discordWebhookSend() {
     return
   }
 
-  // Build one embed per successful check-in; fall back to plain text if none
-  const embeds = checkInResults.map(entry => ({
-    color: 16748258,
-    title: `${entry.meta.fullName} Daily Check-In`,
-    author: {
-      name: `${entry.account.uid} - ${entry.account.nickname}`,
-      icon_url: entry.meta.icon,
-    },
-    fields: [
-      { name: 'Nickname',       value: String(entry.account.nickname), inline: true },
-      { name: 'UID',            value: String(entry.account.uid),      inline: true },
-      { name: 'Rank',           value: String(entry.account.rank),     inline: true },
-      { name: 'Region',         value: String(entry.account.region),   inline: true },
-      ...(entry.award ? [{ name: "Today's Reward", value: `${entry.award.name} x${entry.award.count}`, inline: true }] : []),
-      { name: 'Total Check-Ins', value: String(entry.total),           inline: true },
-      { name: 'Result',          value: entry.result,                  inline: false },
-    ],
-    ...(entry.award ? { thumbnail: { url: entry.award.icon } } : {}),
-    timestamp: new Date().toISOString(),
-    footer: { text: `${entry.meta.fullName} Daily Check-In` },
-  }))
+  // Send one message per check-in result, each with its own game bot username/avatar
+  for (const entry of checkInResults) {
+    await sendDiscordEmbed(entry)
+    // Small delay to avoid hitting Discord rate limits
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
 
-  // Include plain-text error lines (if any) as the message content
+  // If there were any errors, send those as a single plain-text follow-up
   const errorLines = messages.filter(m => m.type === 'error')
-  let content = discordUser ? `<@${discordUser}>\n` : ''
   if (errorLines.length > 0) {
+    let content = discordUser ? `<@${discordUser}>\n` : ''
     content += errorLines.map(m => `(ERROR) ${m.string}`).join('\n')
+
+    const res = await fetch(discordWebhook, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
+
+    if (res.status !== 204) {
+      log('error', 'Error sending error summary to Discord webhook')
+      return
+    }
   }
 
-  const payload = { username: 'HoyoLab Check-In' }
-  if (content) payload.content = content
-  if (embeds.length > 0) payload.embeds = embeds
-
-  const res = await fetch(discordWebhook, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-
-  if (res.status === 204) {
-    log('info', 'Successfully sent message to Discord webhook!')
-    return
-  }
-
-  log('error', 'Error sending message to Discord webhook, please check URL and permissions')
+  log('info', 'Successfully sent message(s) to Discord webhook!')
 }
 
 if (!cookies || !cookies.length) {
