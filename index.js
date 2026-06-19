@@ -21,6 +21,7 @@ const gamesMeta = {
     gameId: 2,
     author: 'Paimon',
     icon: 'https://fastcdn.hoyoverse.com/static-resource-v2/2024/04/12/b700cce2ac4c68a520b15cafa86a03f0_2812765778371293568.png',
+    color: 0xDCC07A, // Warm gold from Genshin's UI and logo
     infoUrl: 'https://sg-hk4e-api.hoyolab.com/event/sol/info',
     homeUrl: 'https://sg-hk4e-api.hoyolab.com/event/sol/home',
   },
@@ -29,6 +30,7 @@ const gamesMeta = {
     gameId: 6,
     author: 'PomPom',
     icon: 'https://fastcdn.hoyoverse.com/static-resource-v2/2024/04/12/74330de1ee71ada37bbba7b72775c9d3_1883015313866544428.png',
+    color: 0x4B6ED9, // Blue-purple of the Astral Express logo
     infoUrl: 'https://sg-public-api.hoyolab.com/event/luna/os/info',
     homeUrl: 'https://sg-public-api.hoyolab.com/event/luna/os/home',
   },
@@ -37,6 +39,7 @@ const gamesMeta = {
     gameId: 1,
     author: 'Kiana',
     icon: 'https://fastcdn.hoyoverse.com/static-resource-v2/2024/02/29/3d96534fd7a35a725f7884e6137346d1_3942255444511793944.png',
+    color: 0xE8173D, // Signature red from the HI3 logo
     infoUrl: 'https://sg-public-api.hoyolab.com/event/mani/info',
     homeUrl: 'https://sg-public-api.hoyolab.com/event/mani/home',
   },
@@ -44,8 +47,8 @@ const gamesMeta = {
     fullName: 'Zenless Zone Zero',
     gameId: 8,
     author: 'Eous',
-    //icon: 'https://hyl-static-res-prod.hoyolab.com/communityweb/business/nap.png',
-    icon: 'https://upload-os-bbs.hoyolab.com/upload/2024/07/08/40717305/92c8ac852286ad55eb52a65efb669a20_3524745439925523144.gif',
+    icon: 'https://hyl-static-res-prod.hoyolab.com/communityweb/business/nap.png',
+    color: 0xF5C545, // Bright yellow-gold from ZZZ's UI and logo
     infoUrl: 'https://sg-public-api.hoyolab.com/event/luna/zzz/os/info',
     homeUrl: 'https://sg-public-api.hoyolab.com/event/luna/zzz/os/home',
   },
@@ -54,6 +57,7 @@ const gamesMeta = {
     gameId: 4,
     author: 'Rosa',
     icon: 'https://hyl-static-res-prod.hoyolab.com/communityweb/business/tot.png',
+    color: 0x8B5BDE, // Purple from Tears of Themis branding
     infoUrl: 'https://sg-public-api.hoyolab.com/event/luna/os/info',
     homeUrl: 'https://sg-public-api.hoyolab.com/event/luna/os/home',
   },
@@ -294,7 +298,7 @@ function log(type, ...data) {
 
 async function sendDiscordEmbed(entry) {
   const embed = {
-    color: 16748258,
+    color: entry.meta.color,
     title: `${entry.meta.fullName} Daily Check-In`,
     author: {
       name: `${entry.account.uid} - ${entry.account.nickname}`,
