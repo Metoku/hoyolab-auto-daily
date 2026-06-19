@@ -65,6 +65,18 @@ const gamesMeta = {
 
 // Stores successful check-in data for rich embeds
 const checkInResults = []
+// Stores error data for rich error embeds
+const errorEmbeds = []
+
+// Games that support code redemption via the ennead.cc API
+const redeemableGames = {
+  gi:  { param: 'genshin',  baseUrl: 'https://sg-hk4e-api.hoyoverse.com/common/apicdkey/api/webExchangeCdkey',         method: 'GET',  bizKey: 'hk4e_global',  regionMap: { SEA: 'os_asia', NA: 'os_usa', EU: 'os_euro', TW: 'os_cht' } },
+  hsr: { param: 'starrail', baseUrl: 'https://sg-hkrpg-api.hoyoverse.com/common/apicdkey/api/webExchangeCdkeyRisk',    method: 'POST', bizKey: 'hkrpg_global', regionMap: { NA: 'prod_official_usa', EU: 'prod_official_eur', SEA: 'prod_official_asia', TW: 'prod_official_cht' } },
+  zzz: { param: 'zenless',  baseUrl: 'https://public-operation-nap.hoyoverse.com/common/apicdkey/api/webExchangeCdkey', method: 'GET',  bizKey: 'nap_global',   regionMap: { TW: 'prod_gf_sg', SEA: 'prod_gf_jp', EU: 'prod_gf_eu', NA: 'prod_gf_us' } },
+}
+
+// Tracks redeemed codes in-memory per run
+const redeemedCodes = {}
 
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 
@@ -149,6 +161,75 @@ async function getAwards(cookie, game) {
   }
 }
 
+async function fetchActiveCodes(game) {
+  try {
+    const config = redeemableGames[game]
+    if (!config) return []
+    const res = await fetch(`https://api.ennead.cc/mihoyo/${config.param}/codes`)
+    const data = await res.json()
+    return data.active ?? []
+  } catch (e) {
+    log('debug', `fetchActiveCodes(${game}): ${e.message}`)
+    return []
+  }
+}
+
+async function redeemCode(game, account, code) {
+  const config = redeemableGames[game]
+  const internalRegion = config.regionMap[account.region]
+  if (!internalRegion) {
+    log('debug', `redeemCode: unknown region ${account.region} for ${game}`)
+    return { success: false, message: `Unknown region: ${account.region}` }
+  }
+
+  const params = new URLSearchParams({
+    t: Date.now(),
+    lang: 'en',
+    uid: account.uid,
+    region: internalRegion,
+    cdkey: code,
+    game_biz: config.bizKey,
+  })
+  if (game === 'gi') params.set('sLangKey', 'en-us')
+
+  const url = `${config.baseUrl}?${params}`
+  try {
+    const res = await fetch(url, {
+      method: config.method,
+      headers: { 'User-Agent': USER_AGENT, Cookie: account.cookie },
+    })
+    const data = await res.json()
+    return { success: data.retcode === 0, message: data.message ?? JSON.stringify(data) }
+  } catch (e) {
+    return { success: false, message: e.message }
+  }
+}
+
+async function redeemCodesForAccount(game, account) {
+  const codes = await fetchActiveCodes(game)
+  if (codes.length === 0) return []
+
+  if (!redeemedCodes[game]) redeemedCodes[game] = new Set()
+  const results = []
+
+  for (const { code } of codes) {
+    if (redeemedCodes[game].has(code)) {
+      log('debug', `Code ${code} already redeemed for ${game}, skipping`)
+      continue
+    }
+
+    const result = await redeemCode(game, account, code)
+    redeemedCodes[game].add(code)
+    results.push({ code, ...result })
+    log('info', game, `Code ${code}: ${result.message}`)
+
+    // HoYoverse requires ~6s between redemptions to avoid rate limiting
+    await sleep(6000)
+  }
+
+  return results
+}
+
 let hasErrors = false
 let latestGames = []
 
@@ -217,9 +298,10 @@ async function run(cookie, games) {
 
     // success responses
     if (code in successCodes) {
+      const alreadySigned = code === '-5003'
       log('info', game, `${successCodes[code]}`)
 
-      // Fetch rich data for Discord embed (only on fresh check-in or already signed)
+      // Fetch rich data for Discord embed
       if (gamesMeta[game] && discordWebhook) {
         const [account, signInfo, awards] = await Promise.all([
           getAccountDetails(cookie, game),
@@ -228,7 +310,6 @@ async function run(cookie, games) {
         ])
 
         if (account && signInfo && awards) {
-          // total_sign_day reflects today's count after signing in; for -5003 it's already correct
           const totalToday = signInfo.total
           const awardIndex = Math.max(0, totalToday - 1)
           const award = awards[awardIndex]
@@ -238,9 +319,19 @@ async function run(cookie, games) {
             meta: gamesMeta[game],
             account,
             total: totalToday,
+            alreadySigned,
             result: successCodes[code],
             award: award ? { name: award.name, count: award.cnt, icon: award.icon } : null,
           })
+
+          // Attempt code redemption for supported games (skip if already signed today
+          // since codes were likely already redeemed in a prior run)
+          if (!alreadySigned && redeemableGames[game]) {
+            const codeResults = await redeemCodesForAccount(game, { ...account, cookie })
+            if (codeResults.length > 0) {
+              checkInResults[checkInResults.length - 1].codeResults = codeResults
+            }
+          }
         }
       }
 
@@ -249,19 +340,19 @@ async function run(cookie, games) {
 
     // error responses
     const errorCodes = {
-      '-100': 'Error not logged in. Your cookie is invalid, try setting up again',
-      '-10002': 'Error not found. You haven\'t played this game'
+      '-100': 'Your cookie is invalid, try setting up again',
+      '-10002': "You haven't played this game",
     }
 
     log('debug', game, `Headers`, Object.fromEntries(res.headers))
     log('debug', game, `Response`, json)
 
-    if (code in errorCodes) {
-      log('error', game, `${errorCodes[code]}`)
-      continue
-    }
+    const errorMessage = errorCodes[code] ?? 'Undocumented error — report to Issues page if this persists'
+    log('error', game, errorMessage)
 
-    log('error', game, `Error undocumented, report to Issues page if this persists`)
+    if (gamesMeta[game] && discordWebhook) {
+      errorEmbeds.push({ game, meta: gamesMeta[game], message: errorMessage })
+    }
   }
 }
 
@@ -296,40 +387,94 @@ function log(type, ...data) {
   messages.push({ type, string })
 }
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+// Posts a single webhook request, respecting Discord rate limits via retry-after
+async function webhookPost(payload) {
+  while (true) {
+    const res = await fetch(discordWebhook, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (res.status === 429) {
+      const retryData = await res.json().catch(() => ({}))
+      const retryAfter = (retryData.retry_after ?? 1) * 1000
+      log('debug', `Discord rate limited, retrying after ${retryAfter}ms`)
+      await sleep(retryAfter)
+      continue
+    }
+
+    return res
+  }
+}
+
 async function sendDiscordEmbed(entry) {
+  // Use a muted grey for already-signed embeds, game color for fresh check-ins
+  const embedColor = entry.alreadySigned ? 0x9B9B9B : entry.meta.color
+
+  const fields = [
+    { name: 'Nickname',        value: String(entry.account.nickname), inline: true },
+    { name: 'UID',             value: String(entry.account.uid),      inline: true },
+    { name: 'Rank',            value: String(entry.account.rank),     inline: true },
+    { name: 'Region',          value: String(entry.account.region),   inline: true },
+    ...(entry.award ? [{ name: "Today's Reward", value: `${entry.award.name} x${entry.award.count}`, inline: true }] : []),
+    { name: 'Total Check-Ins', value: String(entry.total),            inline: true },
+    { name: 'Result',          value: entry.result,                   inline: false },
+  ]
+
+  // Append code redemption results if any
+  if (entry.codeResults?.length > 0) {
+    const codeLines = entry.codeResults.map(r => `\`${r.code}\` — ${r.success ? '✅' : '❌'} ${r.message}`)
+    fields.push({ name: 'Codes Redeemed', value: codeLines.join('\n'), inline: false })
+  }
+
   const embed = {
-    color: entry.meta.color,
+    color: embedColor,
     title: `${entry.meta.fullName} Daily Check-In`,
     author: {
       name: `${entry.account.uid} - ${entry.account.nickname}`,
       icon_url: entry.meta.icon,
     },
-    fields: [
-      { name: 'Nickname',        value: String(entry.account.nickname), inline: true },
-      { name: 'UID',             value: String(entry.account.uid),      inline: true },
-      { name: 'Rank',            value: String(entry.account.rank),     inline: true },
-      { name: 'Region',          value: String(entry.account.region),   inline: true },
-      ...(entry.award ? [{ name: "Today's Reward", value: `${entry.award.name} x${entry.award.count}`, inline: true }] : []),
-      { name: 'Total Check-Ins', value: String(entry.total),            inline: true },
-      { name: 'Result',          value: entry.result,                   inline: false },
-    ],
+    fields,
     ...(entry.award ? { thumbnail: { url: entry.award.icon } } : {}),
     timestamp: new Date().toISOString(),
     footer: { text: `${entry.meta.fullName} Daily Check-In` },
   }
 
-  const res = await fetch(discordWebhook, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      username: entry.meta.author,
-      avatar_url: entry.meta.icon,
-      embeds: [embed],
-    }),
+  const res = await webhookPost({
+    username: entry.meta.author,
+    avatar_url: entry.meta.icon,
+    embeds: [embed],
   })
 
   if (res.status !== 204) {
     log('error', `Error sending Discord embed for ${entry.meta.fullName}`)
+  }
+}
+
+async function sendErrorEmbed(entry) {
+  const embed = {
+    color: 0xFF0000,
+    title: `${entry.meta.fullName} Daily Check-In — Error`,
+    description: `❌ ${entry.message}`,
+    author: {
+      name: entry.meta.fullName,
+      icon_url: entry.meta.icon,
+    },
+    timestamp: new Date().toISOString(),
+    footer: { text: `${entry.meta.fullName} Daily Check-In` },
+  }
+
+  const res = await webhookPost({
+    username: entry.meta.author,
+    avatar_url: entry.meta.icon,
+    embeds: [embed],
+  })
+
+  if (res.status !== 204) {
+    log('error', `Error sending Discord error embed for ${entry.meta.fullName}`)
   }
 }
 
@@ -342,29 +487,16 @@ async function discordWebhookSend() {
     return
   }
 
-  // Send one message per check-in result, each with its own game bot username/avatar
+  // Send one embed per successful check-in
   for (const entry of checkInResults) {
     await sendDiscordEmbed(entry)
-    // Small delay to avoid hitting Discord rate limits
-    await new Promise(resolve => setTimeout(resolve, 500))
+    await sleep(500)
   }
 
-  // If there were any errors, send those as a single plain-text follow-up
-  const errorLines = messages.filter(m => m.type === 'error')
-  if (errorLines.length > 0) {
-    let content = discordUser ? `<@${discordUser}>\n` : ''
-    content += errorLines.map(m => `(ERROR) ${m.string}`).join('\n')
-
-    const res = await fetch(discordWebhook, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content }),
-    })
-
-    if (res.status !== 204) {
-      log('error', 'Error sending error summary to Discord webhook')
-      return
-    }
+  // Send one error embed per failed check-in
+  for (const entry of errorEmbeds) {
+    await sendErrorEmbed(entry)
+    await sleep(500)
   }
 
   log('info', 'Successfully sent message(s) to Discord webhook!')
