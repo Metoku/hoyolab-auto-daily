@@ -224,9 +224,19 @@ async function redeemCode(game, account, code) {
     })
     const data = await res.json()
     log('debug', `redeemCode(${game}, ${code}):`, data)
-    return { success: data.retcode === 0, message: data.message ?? JSON.stringify(data) }
+
+    const retcode = data.retcode
+    const alreadyRedeemed = retcode === -2001
+    const invalidCode     = retcode === -2003
+
+    return {
+      success: retcode === 0,
+      alreadyRedeemed,
+      invalidCode,
+      message: data.message ?? JSON.stringify(data),
+    }
   } catch (e) {
-    return { success: false, message: e.message }
+    return { success: false, alreadyRedeemed: false, invalidCode: false, message: e.message }
   }
 }
 
@@ -245,6 +255,17 @@ async function redeemCodesForAccount(game, account) {
 
     const result = await redeemCode(game, account, code)
     redeemedCodes[game].add(code)
+
+    if (result.alreadyRedeemed) {
+      log('debug', `Code ${code} already redeemed on account, skipping`)
+      continue
+    }
+
+    if (result.invalidCode) {
+      log('debug', `Code ${code} is expired or invalid, skipping`)
+      continue
+    }
+
     results.push({ code, ...result })
     log('info', game, `Code ${code}: ${result.message}`)
 
@@ -449,12 +470,6 @@ async function sendDiscordEmbed(entry) {
     { name: 'Result',          value: entry.result,                   inline: false },
   ]
 
-  // Append code redemption results if any
-  if (entry.codeResults?.length > 0) {
-    const codeLines = entry.codeResults.map(r => `\`${r.code}\` — ${r.success ? '✅' : '❌'} ${r.message}`)
-    fields.push({ name: 'Codes Redeemed', value: codeLines.join('\n'), inline: false })
-  }
-
   const embed = {
     color: embedColor,
     title: `${entry.meta.fullName} Daily Check-In`,
@@ -476,6 +491,38 @@ async function sendDiscordEmbed(entry) {
 
   if (res.status !== 204) {
     log('error', `Error sending Discord embed for ${entry.meta.fullName}`)
+  }
+}
+
+async function sendCodeEmbed(entry) {
+  if (!entry.codeResults?.length) return
+
+  const codeLines = entry.codeResults.map(r =>
+    `\`${r.code}\` — ${r.success ? '✅' : '❌'} ${r.message}`
+  )
+
+  const embed = {
+    color: entry.meta.color,
+    title: `${entry.meta.fullName} Code Redemption`,
+    author: {
+      name: `${entry.account.uid} - ${entry.account.nickname}`,
+      icon_url: entry.meta.icon,
+    },
+    fields: [
+      { name: 'Codes', value: codeLines.join('\n'), inline: false },
+    ],
+    timestamp: new Date().toISOString(),
+    footer: { text: `${entry.meta.fullName} Code Redemption` },
+  }
+
+  const res = await webhookPost({
+    username: entry.meta.author,
+    avatar_url: entry.meta.icon,
+    embeds: [embed],
+  })
+
+  if (res.status !== 204) {
+    log('error', `Error sending code embed for ${entry.meta.fullName}`)
   }
 }
 
@@ -512,10 +559,15 @@ async function discordWebhookSend() {
     return
   }
 
-  // Send one embed per successful check-in
+  // Send check-in embed followed immediately by code embed (if any) per game
   for (const entry of checkInResults) {
     await sendDiscordEmbed(entry)
     await sleep(500)
+
+    if (entry.codeResults?.length > 0) {
+      await sendCodeEmbed(entry)
+      await sleep(500)
+    }
   }
 
   // Send one error embed per failed check-in
