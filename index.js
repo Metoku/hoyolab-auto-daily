@@ -174,12 +174,36 @@ async function fetchActiveCodes(game) {
   }
 }
 
+function extractRedemptionCookie(rawCookie) {
+  // The redemption API only accepts cookie_token(_v2) + account_id(_v2)
+  const fields = {}
+  for (const part of rawCookie.split(';')) {
+    const [k, ...rest] = part.trim().split('=')
+    if (k && rest.length) fields[k.trim()] = rest.join('=').trim()
+  }
+
+  const cookieToken = fields['cookie_token_v2'] ?? fields['cookie_token']
+  const accountId   = fields['account_id_v2']   ?? fields['account_id']
+
+  if (!cookieToken || !accountId) return null
+
+  const tokenKey = fields['cookie_token_v2'] ? 'cookie_token_v2' : 'cookie_token'
+  const idKey    = fields['account_id_v2']   ? 'account_id_v2'   : 'account_id'
+
+  return `${idKey}=${accountId}; ${tokenKey}=${cookieToken}`
+}
+
 async function redeemCode(game, account, code) {
   const config = redeemableGames[game]
   const internalRegion = config.regionMap[account.region]
   if (!internalRegion) {
     log('debug', `redeemCode: unknown region ${account.region} for ${game}`)
     return { success: false, message: `Unknown region: ${account.region}` }
+  }
+
+  const redemptionCookie = extractRedemptionCookie(account.cookie)
+  if (!redemptionCookie) {
+    return { success: false, message: 'Missing cookie_token or account_id in cookie' }
   }
 
   const params = new URLSearchParams({
@@ -196,9 +220,10 @@ async function redeemCode(game, account, code) {
   try {
     const res = await fetch(url, {
       method: config.method,
-      headers: { 'User-Agent': USER_AGENT, Cookie: account.cookie },
+      headers: { 'User-Agent': USER_AGENT, Cookie: redemptionCookie },
     })
     const data = await res.json()
+    log('debug', `redeemCode(${game}, ${code}):`, data)
     return { success: data.retcode === 0, message: data.message ?? JSON.stringify(data) }
   } catch (e) {
     return { success: false, message: e.message }
