@@ -247,6 +247,13 @@ async function redeemCode(game, account, code) {
 }
 
 async function redeemCodesForAccount(game, account) {
+  // Validate cookie before fetching codes
+  const redemptionCookie = extractRedemptionCookie(account.cookie)
+  if (!redemptionCookie) {
+    log('error', game, 'Code redemption skipped: missing cookie_token or account_id in cookie')
+    return []
+  }
+
   const codes = await fetchActiveCodes(game)
   if (codes.length === 0) return []
 
@@ -376,9 +383,8 @@ async function run(cookie, games) {
             award: award ? { name: award.name, count: award.cnt, icon: award.icon } : null,
           })
 
-          // Attempt code redemption for supported games (skip if already signed today
-          // since codes were likely already redeemed in a prior run)
-          if (!alreadySigned && redeemableGames[game]) {
+          // Attempt code redemption for supported games
+          if (redeemableGames[game]) {
             const codeResults = await redeemCodesForAccount(game, { ...account, cookie })
             if (codeResults.length > 0) {
               checkInResults[checkInResults.length - 1].codeResults = codeResults
