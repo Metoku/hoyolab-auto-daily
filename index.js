@@ -182,8 +182,12 @@ function extractRedemptionCookie(rawCookie) {
     if (k && rest.length) fields[k.trim()] = rest.join('=').trim()
   }
 
+  log('debug', 'Cookie fields found:', Object.keys(fields).join(', '))
+
   const cookieToken = fields['cookie_token_v2'] ?? fields['cookie_token']
   const accountId   = fields['account_id_v2']   ?? fields['account_id']
+
+  log('debug', `cookie_token found: ${!!cookieToken}, account_id found: ${!!accountId}`)
 
   if (!cookieToken || !accountId) return null
 
