@@ -4,6 +4,8 @@ const cookies = process.env.COOKIE.split('\n').map(s => s.trim())
 const games = process.env.GAMES.split('\n').map(s => s.trim())
 const discordWebhook = process.env.DISCORD_WEBHOOK
 const discordUser = process.env.DISCORD_USER
+const githubToken = process.env.GITHUB_TOKEN
+const githubRepo = process.env.GITHUB_REPOSITORY // automatically set by GitHub Actions
 const msgDelimiter = ':'
 const messages = []
 const endpoints = {
@@ -75,8 +77,7 @@ const redeemableGames = {
   zzz: { param: 'zenless',  baseUrl: 'https://public-operation-nap.hoyoverse.com/common/apicdkey/api/webExchangeCdkey', method: 'GET',  bizKey: 'nap_global',   regionMap: { TW: 'prod_gf_sg', SEA: 'prod_gf_jp', EU: 'prod_gf_eu', NA: 'prod_gf_us' } },
 }
 
-// Tracks redeemed codes in-memory per run
-const redeemedCodes = {}
+
 
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 
@@ -161,6 +162,59 @@ async function getAwards(cookie, game) {
   }
 }
 
+// --- Persistent redeemed codes via GitHub Repository Variables ---
+
+const VAR_NAME = 'REDEEMED_CODES'
+const githubApiBase = `https://api.github.com/repos/${githubRepo}/actions/variables`
+const githubHeaders = {
+  'Authorization': `Bearer ${githubToken}`,
+  'Accept': 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+  'Content-Type': 'application/json',
+}
+
+// Returns { gi: Set(['CODE1', 'CODE2']), hsr: Set([...]), ... }
+async function loadRedeemedCodes() {
+  try {
+    const res = await fetch(`${githubApiBase}/${VAR_NAME}`, { headers: githubHeaders })
+    if (res.status === 404) return {}
+    const data = await res.json()
+    const parsed = JSON.parse(data.value)
+    // Convert arrays back to Sets
+    return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, new Set(v)]))
+  } catch (e) {
+    log('debug', `loadRedeemedCodes: ${e.message}`)
+    return {}
+  }
+}
+
+// Saves the redeemed codes map back to the GitHub variable
+async function saveRedeemedCodes(codesMap) {
+  try {
+    // Convert Sets to arrays for JSON serialization
+    const serialized = JSON.stringify(
+      Object.fromEntries(Object.entries(codesMap).map(([k, v]) => [k, [...v]]))
+    )
+
+    // Try PATCH first (update), fall back to POST (create)
+    const patchRes = await fetch(`${githubApiBase}/${VAR_NAME}`, {
+      method: 'PATCH',
+      headers: githubHeaders,
+      body: JSON.stringify({ name: VAR_NAME, value: serialized }),
+    })
+
+    if (patchRes.status === 404) {
+      await fetch(githubApiBase, {
+        method: 'POST',
+        headers: githubHeaders,
+        body: JSON.stringify({ name: VAR_NAME, value: serialized }),
+      })
+    }
+  } catch (e) {
+    log('debug', `saveRedeemedCodes: ${e.message}`)
+  }
+}
+
 async function fetchActiveCodes(game) {
   try {
     const config = redeemableGames[game]
@@ -186,10 +240,6 @@ function extractRedemptionCookie(rawCookie) {
 
   const cookieToken = fields['cookie_token_v2'] ?? fields['cookie_token']
   const accountId   = fields['account_id_v2']   ?? fields['account_id']
-
-  console.log('[cookie-debug] fields found:', Object.keys(fields).join(', '))
-  console.log('[cookie-debug] cookie_token found:', !!cookieToken)
-  console.log('[cookie-debug] account_id found:', !!accountId)
 
   if (!cookieToken || !accountId) return null
 
@@ -257,20 +307,25 @@ async function redeemCodesForAccount(game, account) {
   const codes = await fetchActiveCodes(game)
   if (codes.length === 0) return []
 
-  if (!redeemedCodes[game]) redeemedCodes[game] = new Set()
+  // Load persisted redeemed codes from GitHub Variables
+  const allRedeemed = await loadRedeemedCodes()
+  if (!allRedeemed[game]) allRedeemed[game] = new Set()
+
   const results = []
 
   for (const { code } of codes) {
-    if (redeemedCodes[game].has(code)) {
-      log('debug', `Code ${code} already redeemed for ${game}, skipping`)
+    // Skip codes already saved as redeemed in persistent storage
+    if (allRedeemed[game].has(code)) {
+      log('debug', `Code ${code} already redeemed previously for ${game}, skipping`)
       continue
     }
 
     const result = await redeemCode(game, account, code)
-    redeemedCodes[game].add(code)
 
     if (result.alreadyRedeemed) {
-      log('debug', `Code ${code} already redeemed on account, skipping`)
+      // Already redeemed on account — save it so we skip it next time
+      allRedeemed[game].add(code)
+      log('debug', `Code ${code} already redeemed on account, saving and skipping`)
       continue
     }
 
@@ -279,12 +334,19 @@ async function redeemCodesForAccount(game, account) {
       continue
     }
 
+    if (result.success) {
+      allRedeemed[game].add(code)
+    }
+
     results.push({ code, ...result })
     log('info', game, `Code ${code}: ${result.message}`)
 
     // HoYoverse requires ~6s between redemptions to avoid rate limiting
     await sleep(6000)
   }
+
+  // Save updated redeemed codes back to GitHub Variables
+  await saveRedeemedCodes(allRedeemed)
 
   return results
 }
@@ -383,8 +445,8 @@ async function run(cookie, games) {
             award: award ? { name: award.name, count: award.cnt, icon: award.icon } : null,
           })
 
-          // Attempt code redemption for supported games
-          if (redeemableGames[game]) {
+          // Attempt code redemption for supported games (skip if already signed today)
+          if (!alreadySigned && redeemableGames[game]) {
             const codeResults = await redeemCodesForAccount(game, { ...account, cookie })
             if (codeResults.length > 0) {
               checkInResults[checkInResults.length - 1].codeResults = codeResults
