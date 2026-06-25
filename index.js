@@ -4,8 +4,6 @@ const cookies = process.env.COOKIE.split('\n').map(s => s.trim())
 const games = process.env.GAMES.split('\n').map(s => s.trim())
 const discordWebhook = process.env.DISCORD_WEBHOOK
 const discordUser = process.env.DISCORD_USER
-const githubToken = process.env.GITHUB_TOKEN
-const githubRepo = process.env.GITHUB_REPOSITORY // automatically set by GitHub Actions
 const msgDelimiter = ':'
 const messages = []
 const endpoints = {
@@ -162,66 +160,40 @@ async function getAwards(cookie, game) {
   }
 }
 
-// --- Persistent redeemed codes via GitHub Repository Variables ---
+// --- Persistent redeemed codes via local cache file ---
+// The workflow caches this file between runs using actions/cache
 
-const VAR_NAME = 'REDEEMED_CODES'
-const githubApiBase = `https://api.github.com/repos/${githubRepo}/actions/variables`
-const githubHeaders = {
-  'Authorization': `Bearer ${githubToken}`,
-  'Accept': 'application/vnd.github+json',
-  'X-GitHub-Api-Version': '2022-11-28',
-  'Content-Type': 'application/json',
-}
+import { readFileSync, writeFileSync, existsSync } from 'fs'
+
+const CACHE_FILE = '.redeemed-codes.json'
 
 // Returns { gi: Set(['CODE1', 'CODE2']), hsr: Set([...]), ... }
-async function loadRedeemedCodes() {
+function loadRedeemedCodes() {
   try {
-    const res = await fetch(`${githubApiBase}/${VAR_NAME}`, { headers: githubHeaders })
-    if (res.status === 404) {
-      console.log('[redeemed-codes] No existing variable found, starting fresh')
+    if (!existsSync(CACHE_FILE)) {
+      console.log('[redeemed-codes] No cache file found, starting fresh')
       return {}
     }
-    const data = await res.json()
-    console.log('[redeemed-codes] Loaded raw value:', data.value)
-    const parsed = JSON.parse(data.value)
-    // Convert arrays back to Sets
+    const parsed = JSON.parse(readFileSync(CACHE_FILE, 'utf8'))
     const result = Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, new Set(v)]))
-    console.log('[redeemed-codes] Loaded codes:', JSON.stringify(Object.fromEntries(Object.entries(result).map(([k, v]) => [k, [...v]]))))
+    console.log('[redeemed-codes] Loaded:', JSON.stringify(Object.fromEntries(Object.entries(result).map(([k, v]) => [k, [...v]]))))
     return result
   } catch (e) {
-    console.log(`[redeemed-codes] loadRedeemedCodes error: ${e.message}`)
+    console.log(`[redeemed-codes] load error: ${e.message}`)
     return {}
   }
 }
 
-// Saves the redeemed codes map back to the GitHub variable
-async function saveRedeemedCodes(codesMap) {
+function saveRedeemedCodes(codesMap) {
   try {
-    // Convert Sets to arrays for JSON serialization
     const serialized = JSON.stringify(
-      Object.fromEntries(Object.entries(codesMap).map(([k, v]) => [k, [...v]]))
+      Object.fromEntries(Object.entries(codesMap).map(([k, v]) => [k, [...v]])),
+      null, 2
     )
-    console.log('[redeemed-codes] Saving:', serialized)
-
-    // Try PATCH first (update), fall back to POST (create)
-    const patchRes = await fetch(`${githubApiBase}/${VAR_NAME}`, {
-      method: 'PATCH',
-      headers: githubHeaders,
-      body: JSON.stringify({ name: VAR_NAME, value: serialized }),
-    })
-
-    console.log('[redeemed-codes] PATCH status:', patchRes.status)
-
-    if (patchRes.status === 404) {
-      const postRes = await fetch(githubApiBase, {
-        method: 'POST',
-        headers: githubHeaders,
-        body: JSON.stringify({ name: VAR_NAME, value: serialized }),
-      })
-      console.log('[redeemed-codes] POST status:', postRes.status)
-    }
+    writeFileSync(CACHE_FILE, serialized, 'utf8')
+    console.log('[redeemed-codes] Saved:', serialized)
   } catch (e) {
-    console.log(`[redeemed-codes] saveRedeemedCodes error: ${e.message}`)
+    console.log(`[redeemed-codes] save error: ${e.message}`)
   }
 }
 
@@ -317,8 +289,8 @@ async function redeemCodesForAccount(game, account) {
   const codes = await fetchActiveCodes(game)
   if (codes.length === 0) return []
 
-  // Load persisted redeemed codes from GitHub Variables
-  const allRedeemed = await loadRedeemedCodes()
+  // Load persisted redeemed codes from cache file
+  const allRedeemed = loadRedeemedCodes()
   if (!allRedeemed[game]) allRedeemed[game] = new Set()
 
   const results = []
@@ -355,8 +327,8 @@ async function redeemCodesForAccount(game, account) {
     await sleep(6000)
   }
 
-  // Save updated redeemed codes back to GitHub Variables
-  await saveRedeemedCodes(allRedeemed)
+  // Save updated redeemed codes back to cache file
+  saveRedeemedCodes(allRedeemed)
 
   return results
 }
