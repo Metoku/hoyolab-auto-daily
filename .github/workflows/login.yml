@@ -9,14 +9,23 @@ jobs:
   check-in:
     runs-on: ubuntu-latest
     permissions:
-      actions: write   # needed to read/write repository variables
+      actions: write
     steps:
       - name: Clone Repo
         uses: actions/checkout@v4
+
+      - name: Restore redeemed codes cache
+        uses: actions/cache@v4
+        with:
+          path: .redeemed-codes.json
+          key: redeemed-codes
+          restore-keys: redeemed-codes
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - name: Check In
         run: node index.js
         env:
@@ -24,11 +33,10 @@ jobs:
           GAMES: ${{ vars.GAMES }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           DISCORD_USER: ${{ secrets.DISCORD_USER }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # add this line
-  workflow-keepalive:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: liskin/gh-workflow-keepalive@v1
+
+      - name: Save redeemed codes cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .redeemed-codes.json
+          key: redeemed-codes
