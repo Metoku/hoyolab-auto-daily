@@ -177,13 +177,19 @@ const githubHeaders = {
 async function loadRedeemedCodes() {
   try {
     const res = await fetch(`${githubApiBase}/${VAR_NAME}`, { headers: githubHeaders })
-    if (res.status === 404) return {}
+    if (res.status === 404) {
+      console.log('[redeemed-codes] No existing variable found, starting fresh')
+      return {}
+    }
     const data = await res.json()
+    console.log('[redeemed-codes] Loaded raw value:', data.value)
     const parsed = JSON.parse(data.value)
     // Convert arrays back to Sets
-    return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, new Set(v)]))
+    const result = Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, new Set(v)]))
+    console.log('[redeemed-codes] Loaded codes:', JSON.stringify(Object.fromEntries(Object.entries(result).map(([k, v]) => [k, [...v]]))))
+    return result
   } catch (e) {
-    log('debug', `loadRedeemedCodes: ${e.message}`)
+    console.log(`[redeemed-codes] loadRedeemedCodes error: ${e.message}`)
     return {}
   }
 }
@@ -195,6 +201,7 @@ async function saveRedeemedCodes(codesMap) {
     const serialized = JSON.stringify(
       Object.fromEntries(Object.entries(codesMap).map(([k, v]) => [k, [...v]]))
     )
+    console.log('[redeemed-codes] Saving:', serialized)
 
     // Try PATCH first (update), fall back to POST (create)
     const patchRes = await fetch(`${githubApiBase}/${VAR_NAME}`, {
@@ -203,15 +210,18 @@ async function saveRedeemedCodes(codesMap) {
       body: JSON.stringify({ name: VAR_NAME, value: serialized }),
     })
 
+    console.log('[redeemed-codes] PATCH status:', patchRes.status)
+
     if (patchRes.status === 404) {
-      await fetch(githubApiBase, {
+      const postRes = await fetch(githubApiBase, {
         method: 'POST',
         headers: githubHeaders,
         body: JSON.stringify({ name: VAR_NAME, value: serialized }),
       })
+      console.log('[redeemed-codes] POST status:', postRes.status)
     }
   } catch (e) {
-    log('debug', `saveRedeemedCodes: ${e.message}`)
+    console.log(`[redeemed-codes] saveRedeemedCodes error: ${e.message}`)
   }
 }
 
