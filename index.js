@@ -163,7 +163,7 @@ async function getAwards(cookie, game) {
 // --- Persistent redeemed codes via local cache file ---
 // The workflow caches this file between runs using actions/cache
 
-const { readFileSync, writeFileSync, existsSync } = require('fs')
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 
 const CACHE_FILE = '.redeemed-codes.json'
 
@@ -264,7 +264,8 @@ async function redeemCode(game, account, code) {
     log('debug', `redeemCode(${game}, ${code}):`, data)
 
     const retcode = data.retcode
-    const alreadyRedeemed = retcode === -2001
+    // -2017, -2018: already redeemed on this account — -2003: expired/invalid
+    const alreadyRedeemed = retcode === -2017 || retcode === -2018
     const invalidCode     = retcode === -2003
 
     return {
@@ -305,9 +306,9 @@ async function redeemCodesForAccount(game, account) {
     const result = await redeemCode(game, account, code)
 
     if (result.alreadyRedeemed) {
-      // Already redeemed on account — save it so we skip it next time
+      // Save to cache so we skip it on future runs
       allRedeemed[game].add(code)
-      log('debug', `Code ${code} already redeemed on account, saving and skipping`)
+      log('debug', `Code ${code} already redeemed on account, saving to cache`)
       continue
     }
 
