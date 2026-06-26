@@ -163,7 +163,7 @@ async function getAwards(cookie, game) {
 // --- Persistent redeemed codes via local cache file ---
 // The workflow caches this file between runs using actions/cache
 
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+const { readFileSync, writeFileSync, existsSync } = require('fs')
 
 const CACHE_FILE = '.redeemed-codes.json'
 
