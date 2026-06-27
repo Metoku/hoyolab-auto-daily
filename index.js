@@ -255,29 +255,41 @@ async function redeemCode(game, account, code) {
   if (game === 'gi') params.set('sLangKey', 'en-us')
 
   const url = `${config.baseUrl}?${params}`
-  try {
-    const res = await fetch(url, {
-      method: config.method,
-      headers: { 'User-Agent': USER_AGENT, Cookie: redemptionCookie },
-    })
-    const data = await res.json()
-    log('debug', `redeemCode(${game}, ${code}):`, data)
+  let attempts = 0
+  while (attempts < 3) {
+    try {
+      const res = await fetch(url, {
+        method: config.method,
+        headers: { 'User-Agent': USER_AGENT, Cookie: redemptionCookie },
+      })
+      const data = await res.json()
+      log('debug', `redeemCode(${game}, ${code}):`, data)
 
-    const retcode = data.retcode
-    // -2017, -2018: already redeemed on this account — -2003: expired/invalid
-    const alreadyRedeemed = retcode === -2017 || retcode === -2018
-    const invalidCode     = retcode === -2003
+      const retcode = data.retcode
+      // -2017, -2018: already redeemed — -2003: expired/invalid — -2016: cooldown
+      const alreadyRedeemed = retcode === -2017 || retcode === -2018
+      const invalidCode     = retcode === -2003
+      const onCooldown      = retcode === -2016
 
-    return {
-      success: retcode === 0,
-      alreadyRedeemed,
-      invalidCode,
-      message: data.message ?? JSON.stringify(data),
+      if (onCooldown) {
+        attempts++
+        log('debug', `Code ${code} on cooldown, waiting 6s before retry (attempt ${attempts}/3)`)
+        await sleep(6000)
+        continue
+      }
+
+      return {
+        success: retcode === 0,
+        alreadyRedeemed,
+        invalidCode,
+        message: data.message ?? JSON.stringify(data),
+      }
+    } catch (e) {
+      return { success: false, alreadyRedeemed: false, invalidCode: false, message: e.message }
     }
-  } catch (e) {
-    return { success: false, alreadyRedeemed: false, invalidCode: false, message: e.message }
   }
-}
+
+  return { success: false, alreadyRedeemed: false, invalidCode: false, message: 'Cooldown retry limit reached' }
 
 async function redeemCodesForAccount(game, account) {
   // Validate cookie before fetching codes
@@ -324,8 +336,8 @@ async function redeemCodesForAccount(game, account) {
     results.push({ code, ...result })
     log('info', game, `Code ${code}: ${result.message}`)
 
-    // HoYoverse requires ~6s between redemptions to avoid rate limiting
-    await sleep(6000)
+    // HoYoverse requires time between redemptions to avoid rate limiting
+    await sleep(8000)
   }
 
   // Save updated redeemed codes back to cache file
