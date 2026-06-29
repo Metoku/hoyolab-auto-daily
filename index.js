@@ -288,6 +288,7 @@ async function redeemCode(game, account, code) {
   }
 
   return { success: false, alreadyRedeemed: false, invalidCode: false, message: 'Cooldown retry limit reached' }
+}
 
 async function redeemCodesForAccount(game, account) {
   // Validate cookie before fetching codes
