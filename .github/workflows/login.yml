@@ -1,10 +1,8 @@
 name: Daily check in
-
 on:
   schedule:
-    - cron: "5 16 * * *" # scheduled at 00:05 (UTC+8) everyday"
+    - cron: "5 16 * * *" # scheduled at 00:05 (UTC+8) everyday
   workflow_dispatch:
-
 jobs:
   check-in:
     runs-on: ubuntu-latest
@@ -13,19 +11,16 @@ jobs:
     steps:
       - name: Clone Repo
         uses: actions/checkout@v4
-
       - name: Restore redeemed codes cache
         uses: actions/cache@v4
         with:
           path: .redeemed-codes.json
-          key: redeemed-codes
+          key: redeemed-codes-${{ github.run_id }}
           restore-keys: redeemed-codes
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Check In
         run: node index.js
         env:
@@ -33,10 +28,10 @@ jobs:
           GAMES: ${{ vars.GAMES }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           DISCORD_USER: ${{ secrets.DISCORD_USER }}
-
-      - name: Save redeemed codes cache
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: .redeemed-codes.json
-          key: redeemed-codes
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
