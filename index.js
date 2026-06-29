@@ -317,25 +317,17 @@ async function redeemCodesForAccount(game, account) {
     const result = await redeemCode(game, account, code)
 
     if (result.alreadyRedeemed) {
-      // Save to cache so we skip it on future runs
       allRedeemed[game].add(code)
       log('debug', `Code ${code} already redeemed on account, saving to cache`)
-      continue
-    }
-
-    if (result.invalidCode) {
+    } else if (result.invalidCode) {
       log('debug', `Code ${code} is expired or invalid, skipping`)
-      continue
+    } else {
+      if (result.success) allRedeemed[game].add(code)
+      results.push({ code, ...result })
+      log('info', game, `Code ${code}: ${result.message}`)
     }
 
-    if (result.success) {
-      allRedeemed[game].add(code)
-    }
-
-    results.push({ code, ...result })
-    log('info', game, `Code ${code}: ${result.message}`)
-
-    // HoYoverse requires time between redemptions to avoid rate limiting
+    // Always wait 15s after each attempt before moving to the next code
     await sleep(15000)
   }
 
