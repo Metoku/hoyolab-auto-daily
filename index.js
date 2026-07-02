@@ -290,6 +290,9 @@ async function redeemCode(game, account, code) {
   return { success: false, alreadyRedeemed: false, invalidCode: false, message: 'Cooldown retry limit reached' }
 }
 
+// Load once globally at startup
+const allRedeemedCodes = loadRedeemedCodes()
+
 async function redeemCodesForAccount(game, account) {
   // Validate cookie before fetching codes
   const redemptionCookie = extractRedemptionCookie(account.cookie)
@@ -301,15 +304,13 @@ async function redeemCodesForAccount(game, account) {
   const codes = await fetchActiveCodes(game)
   if (codes.length === 0) return []
 
-  // Load persisted redeemed codes from cache file
-  const allRedeemed = loadRedeemedCodes()
-  if (!allRedeemed[game]) allRedeemed[game] = new Set()
+  if (!allRedeemedCodes[game]) allRedeemedCodes[game] = new Set()
 
   const results = []
 
   for (const { code } of codes) {
     // Skip codes already saved as redeemed in persistent storage
-    if (allRedeemed[game].has(code)) {
+    if (allRedeemedCodes[game].has(code)) {
       log('debug', `Code ${code} already redeemed previously for ${game}, skipping`)
       continue
     }
@@ -317,12 +318,12 @@ async function redeemCodesForAccount(game, account) {
     const result = await redeemCode(game, account, code)
 
     if (result.alreadyRedeemed) {
-      allRedeemed[game].add(code)
+      allRedeemedCodes[game].add(code)
       log('debug', `Code ${code} already redeemed on account, saving to cache`)
     } else if (result.invalidCode) {
       log('debug', `Code ${code} is expired or invalid, skipping`)
     } else {
-      if (result.success) allRedeemed[game].add(code)
+      if (result.success) allRedeemedCodes[game].add(code)
       results.push({ code, ...result })
       log('info', game, `Code ${code}: ${result.message}`)
     }
@@ -330,9 +331,6 @@ async function redeemCodesForAccount(game, account) {
     // Always wait 15s after each attempt before moving to the next code
     await sleep(15000)
   }
-
-  // Save updated redeemed codes back to cache file
-  saveRedeemedCodes(allRedeemed)
 
   return results
 }
@@ -655,6 +653,9 @@ for (const index in cookies) {
 if (discordWebhook && URL.canParse(discordWebhook)) {
   await discordWebhookSend()
 }
+
+// Save all redeemed codes to cache file once at the end
+saveRedeemedCodes(allRedeemedCodes)
 
 if (hasErrors) {
   console.log('')
