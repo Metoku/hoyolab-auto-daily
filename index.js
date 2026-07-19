@@ -637,6 +637,8 @@ async function discordWebhookSend() {
   log('info', 'Successfully sent message(s) to Discord webhook!')
 }
 
+const redeemOnly = process.env.REDEEM_ONLY === 'true'
+
 if (!cookies || !cookies.length) {
   throw new Error('COOKIE environment variable not set!')
 }
@@ -645,9 +647,41 @@ if (!games || !games.length) {
   throw new Error('GAMES environment variable not set!')
 }
 
-for (const index in cookies) {
-  log('info', `-- CHECKING IN FOR ACCOUNT ${Number(index) + 1} --`)
-  await run(cookies[index], games[index])
+if (redeemOnly) {
+  // Skip check-in, go straight to code redemption for each account
+  for (const index in cookies) {
+    log('info', `-- REDEEMING CODES FOR ACCOUNT ${Number(index) + 1} --`)
+    const cookie = cookies[index]
+    const accountGames = games[index] ? games[index].split(' ') : []
+
+    for (const game of accountGames) {
+      const g = game.toLowerCase()
+      if (!redeemableGames[g]) continue
+
+      log('debug', `\n----- REDEEMING CODES FOR ${g} -----`)
+      const account = await getAccountDetails(cookie, g)
+      if (!account) continue
+
+      const codeResults = await redeemCodesForAccount(g, { ...account, cookie })
+      if (codeResults.length > 0) {
+        checkInResults.push({
+          game: g,
+          meta: gamesMeta[g],
+          account,
+          total: 0,
+          alreadySigned: false,
+          result: 'Code redemption only',
+          award: null,
+          codeResults,
+        })
+      }
+    }
+  }
+} else {
+  for (const index in cookies) {
+    log('info', `-- CHECKING IN FOR ACCOUNT ${Number(index) + 1} --`)
+    await run(cookies[index], games[index])
+  }
 }
 
 if (discordWebhook && URL.canParse(discordWebhook)) {
